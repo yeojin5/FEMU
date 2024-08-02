@@ -4,6 +4,7 @@
 
 static void *ftl_thread(void *arg);
 
+// gc 해야하는지 말아야하는지 결정
 static inline bool should_gc(struct ssd *ssd)
 {
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
@@ -25,6 +26,7 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
     ssd->maptbl[lpn] = *ppa;
 }
 
+/* calculate page index */
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -157,18 +159,19 @@ static struct line *get_next_free_line(struct ssd *ssd)
 static void ssd_advance_write_pointer(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
-    struct write_pointer *wpp = &ssd->wp;
+    struct write_pointer *wpp = &ssd->wp; // write pointer (= next write addr)
     struct line_mgmt *lm = &ssd->lm;
 
-    check_addr(wpp->ch, spp->nchs);
+    check_addr(wpp->ch, spp->nchs); // check address ch (0 to nchs)
     wpp->ch++;
-    if (wpp->ch == spp->nchs) {
-        wpp->ch = 0;
-        check_addr(wpp->lun, spp->luns_per_ch);
-        wpp->lun++;
+    if (wpp->ch == spp->nchs) { // if same channel
+	/* go to next channel */
+        wpp->ch = 0; // writepointer's chennel -> 0
+        check_addr(wpp->lun, spp->luns_per_ch); 
+        wpp->lun++; //writepointer's logical unit number +1
         /* in this case, we should go to next lun */
-        if (wpp->lun == spp->luns_per_ch) {
-            wpp->lun = 0;
+        if (wpp->lun == spp->luns_per_ch) { // wpp의 logical unit이 channel의 가장 마지막 logical unit일때
+            wpp->lun = 0; // go to next logical unit
             /* go to next page in the block */
             check_addr(wpp->pg, spp->pgs_per_blk);
             wpp->pg++;
@@ -176,11 +179,13 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
                 wpp->pg = 0;
                 /* move current line to {victim,full} line list */
                 if (wpp->curline->vpc == spp->pgs_per_line) {
+		/* line의 모든 페이지가 유효하면 -> 해당 라인을 full_line_list로 이동한다. */
                     /* all pgs are still valid, move to full line list */
                     ftl_assert(wpp->curline->ipc == 0);
-                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
+                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry); // line_mgmt 구조체의 full_line_list 헤더에, wpp->curline 을 리스트에 추가한다. 
                     lm->full_line_cnt++;
                 } else {
+		/* 라인의 모든 페이지가 유효하지 않으면 victim_line_pq에 삽입한다. */
                     ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
                     /* there must be some invalid pages in this line */
                     ftl_assert(wpp->curline->ipc > 0);
@@ -191,12 +196,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
                 check_addr(wpp->blk, spp->blks_per_pl);
                 wpp->curline = NULL;
                 wpp->curline = get_next_free_line(ssd);
-                if (!wpp->curline) {
+                /* if there is no new line here, force the program to shut down */
+		if (!wpp->curline) {
                     /* TODO */
                     abort();
                 }
-                wpp->blk = wpp->curline->id;
+                /* update block index to new line's id */
+		wpp->blk = wpp->curline->id;
                 check_addr(wpp->blk, spp->blks_per_pl);
+
                 /* make sure we are starting from page 0 in the super block */
                 ftl_assert(wpp->pg == 0);
                 ftl_assert(wpp->lun == 0);
@@ -208,6 +216,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
+/* write pointer가 가리키는 주소의 page를 ppa structure에 넣는다. */
 static struct ppa get_new_page(struct ssd *ssd)
 {
     struct write_pointer *wpp = &ssd->wp;
@@ -615,7 +624,6 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
 }
 
 static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
-{
     /* advance ssd status, we don't care about how long it takes */
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcr;
