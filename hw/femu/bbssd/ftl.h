@@ -80,29 +80,29 @@ struct nand_page {
 
 struct nand_block {
     struct nand_page *pg;
-    int npgs;
+    int npgs; /* number of page */
     int ipc; /* invalid page count */
     int vpc; /* valid page count */
-    int erase_cnt;
+    int erase_cnt; /* erase count */
     int wp; /* current write pointer */
 };
 
 struct nand_plane {
     struct nand_block *blk;
-    int nblks;
+    int nblks; /* number of block */
 };
 
 struct nand_lun {
     struct nand_plane *pl;
-    int npls;
-    uint64_t next_lun_avail_time;
-    bool busy;
-    uint64_t gc_endtime;
+    int npls; /* number of plane */
+    uint64_t next_lun_avail_time; /* next logical unit available time */
+    bool busy; /* busy or not */
+    uint64_t gc_endtime; /* gc end_time */
 };
 
 struct ssd_channel {
-    struct nand_lun *lun;
-    int nluns;
+    struct nand_lun *lun; 
+    int nluns; /**/
     uint64_t next_ch_avail_time;
     bool busy;
     uint64_t gc_endtime;
@@ -170,17 +170,17 @@ typedef struct line {
 /* wp: record next write addr */
 struct write_pointer {
     struct line *curline;
-    int ch;
-    int lun;
-    int pg;
-    int blk;
-    int pl;
+    int ch; //channel
+    int lun; //
+    int pg; // page
+    int blk; //block
+    int pl; //plane
 };
 
 struct line_mgmt {
     struct line *lines;
     /* free line list, we only need to maintain a list of blk numbers */
-    QTAILQ_HEAD(free_line_list, line) free_line_list;
+    QTAILQ_HEAD(free_line_list, line) free_line_list; // queue tail queue (linked list에 새로운 항목 추가할떄 사용 
     pqueue_t *victim_line_pq;
     //QTAILQ_HEAD(victim_line_list, line) victim_line_list;
     QTAILQ_HEAD(full_line_list, line) full_line_list;
