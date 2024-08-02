@@ -1,5 +1,5 @@
-#ifndef __FEMU_FTL_H
-#define __FEMU_FTL_H
+#ifndef __FEMU_DFTL_H
+#define __FEMU_DFTL_H
 
 #include "../nvme.h"
 
@@ -7,14 +7,16 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+#define CMT_HASH_SIZE (24593ULL)
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-    NAND_READ_LATENCY = 40000, //read latency = 40us
-    NAND_PROG_LATENCY = 200000, // program latency = 200us
-    NAND_ERASE_LATENCY = 2000000, // erase latency = 2ms
+    NAND_READ_LATENCY = 40000,
+    NAND_PROG_LATENCY = 200000,
+    NAND_ERASE_LATENCY = 2000000,
 };
 
 enum {
@@ -42,8 +44,21 @@ enum {
     FEMU_RESET_ACCT = 5,
     FEMU_ENABLE_LOG = 6,
     FEMU_DISABLE_LOG = 7,
+
+    FEMU_RESET_STAT = 8,
+    FEMU_PRINT_STAT = 9,
 };
 
+enum {
+    CLEAN = 0,
+    DIRTY = 1
+};
+
+enum {
+    NONE = 0,
+    DATA = 1,
+    TRANS = 2
+};
 
 #define BLK_BITS    (16)
 #define PG_BITS     (16)
@@ -56,13 +71,12 @@ enum {
 struct ppa {
     union {
         struct {
-	/*define in run-blackbox script*/
-            uint64_t blk : BLK_BITS; // block number
-            uint64_t pg  : PG_BITS; // page number
-            uint64_t sec : SEC_BITS; // sector number
-            uint64_t pl  : PL_BITS; // plane number
-            uint64_t lun : LUN_BITS; // logical unit number
-            uint64_t ch  : CH_BITS; //channel number
+            uint64_t blk : BLK_BITS;
+            uint64_t pg  : PG_BITS;
+            uint64_t sec : SEC_BITS;
+            uint64_t pl  : PL_BITS;
+            uint64_t lun : LUN_BITS;
+            uint64_t ch  : CH_BITS;
             uint64_t rsv : 1;
         } g;
 
@@ -124,8 +138,7 @@ struct ssdparams {
                        * this defines the channel bandwith
                        */
 
-    //gc parameter
-    double gc_thres_pcent; //threshold percentage
+    double gc_thres_pcent;
     int gc_thres_lines;
     double gc_thres_pcent_high;
     int gc_thres_lines_high;
@@ -156,6 +169,10 @@ struct ssdparams {
     int tt_pls;       /* total # of planes in the SSD */
 
     int tt_luns;      /* total # of LUNs in the SSD */
+
+    int ents_per_pg;
+    int tt_cmt_size;
+    int tt_gtd_size;
 };
 
 typedef struct line {
@@ -165,10 +182,21 @@ typedef struct line {
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
+    int type;
 } line;
 
 /* wp: record next write addr */
 struct write_pointer {
+    struct line *curline;
+    int ch;
+    int lun;
+    int pg;
+    int blk;
+    int pl;
+};
+
+/* wp: record next translation page write addr */
+struct trans_write_pointer {
     struct line *curline;
     int ch;
     int lun;
@@ -196,20 +224,56 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+typedef struct cmt_entry {
+    uint64_t lpn;
+    uint64_t ppn;
+    int dirty;
+    QTAILQ_ENTRY(cmt_entry) entry;
+    struct cmt_entry *next;    /* for hash */
+} cmt_entry;
+
+typedef struct hash_table {
+    cmt_entry *cmt_table[CMT_HASH_SIZE];
+}hash_table;
+
+struct cmt_mgmt {
+    cmt_entry *cmt_entries;
+    QTAILQ_HEAD(free_cmt_entry_list, cmt_entry) free_cmt_entry_list;
+    //QTAIQ_HEAD 为热度最高的
+    QTAILQ_HEAD(cmt_entry_list, cmt_entry) cmt_entry_list;
+    int tt_entries;
+    int free_cmt_entry_cnt;
+    int used_cmt_entry_cnt;
+    struct hash_table ht;
+};
+
+struct statistics {
+    uint64_t cmt_hit_cnt;
+    uint64_t cmt_miss_cnt;
+    double cmt_hit_ratio;
+    uint64_t access_cnt;
+};
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    struct write_pointer wp; /* write next address*/
-    struct line_mgmt lm; 
+    struct write_pointer wp;
+    struct line_mgmt lm;
+
+    struct cmt_mgmt cm;
+    struct ppa *gtd;
+    struct trans_write_pointer twp;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
     struct rte_ring **to_poller;
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
+
+    struct statistics stat;
 };
 
 void ssd_init(FemuCtrl *n);
